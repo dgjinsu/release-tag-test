@@ -1,5 +1,6 @@
 name: rc-release
-# 트리거 ①: release/ 로 시작하는 브랜치에 push 되면 후보(rc) Release 를 자동 발행한다.
+# 트리거 ①: release/<버전> 브랜치에 push 되면 후보(rc) Release 를 자동 발행한다.
+#           버전은 브랜치 이름에서 읽는다.  release/1.1.0 → v1.1.0-rc.1, rc.2, ...
 on:
   push:
     branches: ['release/**']
@@ -18,24 +19,43 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: rc 태그 이름 계산 (VERSION + 기존 rc 최대 번호 + 1)
+      - name: 버전 = 브랜치 이름 (release/1.1.0 → 1.1.0)
         run: |
-          V=$(tr -d ' \r\n' < VERSION)
-          PREV=$(git tag -l "v${V}-rc.*" --sort=-v:refname | head -1)
-          if [ -n "$PREV" ]; then N=$(( ${PREV##*-rc.} + 1 )); else N=1; fi
-          TAG="v${V}-rc.${N}"
-          echo "TAG=$TAG"   >> "$GITHUB_ENV"
-          echo "PREV=$PREV" >> "$GITHUB_ENV"
-          echo "이번 태그: $TAG (직전 rc: ${PREV:-없음})"
+          V="${GITHUB_REF_NAME#release/}"
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::브랜치 이름이 release/<MAJOR.MINOR.PATCH> 형식이 아닙니다: $GITHUB_REF_NAME"; exit 1
+          fi
+          if gh release view "v${V}" >/dev/null 2>&1; then
+            echo "::error::v${V} 는 이미 정식 릴리즈된 버전입니다. 새 버전 브랜치(예: release/$(echo "$V" | awk -F. '{print $1"."$2"."$3+1}'))를 만드세요"; exit 1
+          fi
+          echo "V=$V" >> "$GITHUB_ENV"
+          echo "버전: $V (브랜치 $GITHUB_REF_NAME)"
 
-      - name: 바뀐 서비스 판별 (직전 rc 대비 services/ 아래 diff)
+      - name: rc 번호 계산 (이 버전의 기존 rc 최대 번호 + 1)
         run: |
-          if [ -z "$PREV" ]; then
+          LAST_RC=$(git tag -l "v${V}-rc.*" --sort=-v:refname | head -1)
+          if [ -n "$LAST_RC" ]; then N=$(( ${LAST_RC##*-rc.} + 1 )); else N=1; fi
+          TAG="v${V}-rc.${N}"
+          echo "TAG=$TAG"         >> "$GITHUB_ENV"
+          echo "LAST_RC=$LAST_RC" >> "$GITHUB_ENV"
+          echo "이번 태그: $TAG (직전 rc: ${LAST_RC:-없음})"
+
+      - name: 비교 기준 결정 (직전 rc → 없으면 최신 정식 릴리즈 → 없으면 전체 빌드)
+        run: |
+          BASE="$LAST_RC"
+          if [ -z "$BASE" ]; then
+            BASE=$(git tag -l 'v[0-9]*' | grep -v -- '-rc\.' | sort -V | tail -1 || true)
+          fi
+          echo "BASE=$BASE" >> "$GITHUB_ENV"
+          echo "비교 기준: ${BASE:-없음 → 전체 빌드}"
+
+      - name: 바뀐 서비스 판별 (비교 기준 대비 services/ 아래 diff)
+        run: |
+          if [ -z "$BASE" ]; then
             CHANGED=$(ls services)
-            echo "직전 rc 없음 → 전체 빌드"
           else
-            CHANGED=$(git diff --name-only "$PREV" HEAD -- services/ | cut -d/ -f2 | sort -u)
-            gh release download "$PREV" -p images.json -O prev-images.json
+            CHANGED=$(git diff --name-only "$BASE" HEAD -- services/ | cut -d/ -f2 | sort -u)
+            gh release download "$BASE" -p images.json -O prev-images.json
           fi
           { echo "CHANGED<<LIST"; echo "$CHANGED"; echo "LIST"; } >> "$GITHUB_ENV"
           echo "빌드 대상: ${CHANGED:-없음}"
@@ -53,7 +73,8 @@ jobs:
             --title "$TAG" --target "$GITHUB_SHA"
           {
             echo "### Release $TAG 발행 (Pre-release)"
-            echo "- 직전 rc: ${PREV:-없음}"
+            echo "- 브랜치: $GITHUB_REF_NAME"
+            echo "- 비교 기준: ${BASE:-없음(전체 빌드)}"
             echo "- 빌드한 서비스: ${CHANGED:-없음}"
             echo "- https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
           } >> "$GITHUB_STEP_SUMMARY"
