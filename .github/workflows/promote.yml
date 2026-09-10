@@ -1,6 +1,8 @@
 name: promote
 # 트리거 ②: 사람이 Actions 탭에서 "Run workflow" 버튼으로 실행한다.
-#           통과한 rc 를 재빌드 없이 정식 버전으로 승격(같은 커밋, 같은 파일에 정식 이름만 부여).
+#           통과한 rc 를 재빌드 없이 정식 버전으로 승격한다.
+#           rc 는 "바뀐 것만" 첨부하지만, 정식은 어느 사이트든 이것 하나로 설치할 수 있어야 하므로
+#           images.json 의 from 을 따라 각 rc 에 흩어진 tar 를 모아 "서비스 전체" 번들을 만든다.
 on:
   workflow_dispatch:
     inputs:
@@ -38,17 +40,36 @@ jobs:
           fi
           echo "승격: $RC → $FINAL (commit $RC_SHA)"
 
-      - name: rc 첨부 파일 그대로 내려받기 (재빌드 없음)
-        run: gh release download "$RC" -D out/ && ls -la out
+      - name: 정식 번들 조립 (각 rc 에서 검증된 tar 를 모음, 재빌드 없음)
+        run: |
+          gh release download "$RC" -D out/          # 마지막 rc 의 첨부: images.json, patch.sh, 바뀐 서비스 tar
+          rm -f out/SHA256SUMS
+          # images.json 의 서비스마다 그 tar 를 만든 rc(from) 에서 내려받는다. 마지막 rc 에 이미 있으면 그대로 쓴다.
+          jq -r '.images[] | "\(.name) \(.from)"' out/images.json | while read -r name from; do
+            from="${from%%[[:cntrl:]]*}"    # Windows jq 가 줄 끝에 붙이는 CR 제거
+            f="${name}-${from}.tar.gz"
+            if [ ! -f "out/$f" ]; then
+              gh release download "$from" -p "$f" -D out/ \
+                || { echo "::error::$from 에서 $f 를 받을 수 없습니다. rc 첨부는 정식 승격 전에 지우면 안 됩니다"; exit 1; }
+            fi
+            mv "out/$f" "out/${name}-${FINAL}.tar.gz"
+            echo "$name  ←  $from"
+          done
+          # 내용(digest)은 rc 때와 동일. 이름표(release, tag)만 정식으로 바꾼다.
+          jq --arg t "$FINAL" '.release = $t | .images[].tag = $t' out/images.json > out/images.json.tmp \
+            && mv out/images.json.tmp out/images.json
+          ( cd out && sha256sum *.tar.gz images.json patch.sh > SHA256SUMS )
+          echo "---- 정식 번들"; ls -la out; cat out/images.json
 
-      - name: 정식 Release 생성 (같은 커밋, 같은 파일)
+      - name: 정식 Release 생성 (같은 커밋, 검증된 파일 전체)
         run: |
           gh release create "$FINAL" out/* \
             --latest --generate-notes \
             --title "$FINAL" --target "$RC_SHA" \
-            --notes "Promoted from $RC (commit $RC_SHA). 첨부 파일은 $RC 와 동일합니다."
+            --notes "Promoted from $RC (commit $RC_SHA). 모든 서비스 tar 는 rc 에서 검증된 파일 그대로이며(재빌드 없음) digest 는 $RC 의 images.json 과 같습니다."
           {
             echo "### $FINAL 승격 완료 (from $RC)"
             echo "- commit: $RC_SHA"
+            echo "- 포함 서비스: $(jq -r '[.images[].name] | join(", ")' out/images.json)"
             echo "- https://github.com/$GITHUB_REPOSITORY/releases/tag/$FINAL"
           } >> "$GITHUB_STEP_SUMMARY"

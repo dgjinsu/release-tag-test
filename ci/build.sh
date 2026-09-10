@@ -32,8 +32,8 @@ done
       digest="sha256:$(sha256sum "out/${svc}-${TAG}.tar.gz" | cut -d' ' -f1)"
       from="$TAG"
     elif [ "$PREV" != "-" ] && [ -f "$PREV" ]; then
-      digest=$(jq -r --arg s "$svc" '.images[] | select(.name==$s) | .digest' "$PREV")
-      from=$(jq -r --arg s "$svc" '.images[] | select(.name==$s) | .from' "$PREV")
+      digest=$(jq -r --arg s "$svc" '.images[] | select(.name==$s) | .digest' "$PREV" | tr -d '[:cntrl:]')
+      from=$(jq -r --arg s "$svc" '.images[] | select(.name==$s) | .from' "$PREV" | tr -d '[:cntrl:]')
     else
       echo "ERROR: $svc 는 바뀌지 않았는데 직전 images.json 이 없습니다" >&2; exit 1
     fi
