@@ -1,0 +1,71 @@
+name: promote
+# 트리거 ②: 사람이 Actions 탭에서 "Run workflow" 버튼으로 실행한다.
+#           통과한 rc 를 재빌드 없이 정식 버전으로 승격(같은 커밋, 같은 파일에 정식 이름만 부여).
+on:
+  workflow_dispatch:
+    inputs:
+      rc:
+        description: '통과한 RC 태그 (예: v1.12.1-rc.2)'
+        required: true
+        type: string
+      site:
+        description: '적용 사이트'
+        required: true
+        type: choice
+        options: [A, B]
+        default: A
+
+permissions:
+  contents: write
+  deployments: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RC: ${{ inputs.rc }}
+      SITE: ${{ inputs.site }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.rc }}      # rc 커밋을 그대로 체크아웃
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: 정식 태그 이름 계산 + 사전 점검
+        run: |
+          FINAL="${RC%%-rc.*}"
+          RC_SHA=$(git rev-parse HEAD)         # workflow_dispatch 의 GITHUB_SHA 는 rc 커밋이 아니므로 직접 구한다
+          echo "FINAL=$FINAL"   >> "$GITHUB_ENV"
+          echo "RC_SHA=$RC_SHA" >> "$GITHUB_ENV"
+          gh release view "$RC" --json isPrerelease -q .isPrerelease | grep -qx true \
+            || { echo "::error::$RC 는 pre-release 가 아닙니다"; exit 1; }
+          if gh release view "$FINAL" >/dev/null 2>&1; then
+            echo "::error::$FINAL 이 이미 존재합니다. 정식 태그는 덮어쓰지 않습니다"; exit 1
+          fi
+          echo "승격: $RC → $FINAL (commit $RC_SHA)"
+
+      - name: rc 첨부 파일 그대로 내려받기 (재빌드 없음)
+        run: gh release download "$RC" -D out/ && ls -la out
+
+      - name: 정식 Release 생성 (같은 커밋, 같은 파일)
+        run: |
+          gh release create "$FINAL" out/* \
+            --latest --generate-notes \
+            --title "$FINAL" --target "$RC_SHA" \
+            --notes "Promoted from $RC (commit $RC_SHA). 첨부 파일은 $RC 와 동일합니다."
+          {
+            echo "### $FINAL 승격 완료 (from $RC)"
+            echo "- commit: $RC_SHA"
+            echo "- https://github.com/$GITHUB_REPOSITORY/releases/tag/$FINAL"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 배포 기록 (repo 의 Environments 탭에 site-A 로 남김)
+        run: |
+          ID=$(jq -n --arg ref "$FINAL" --arg env "site-$SITE" --arg d "promoted from $RC" \
+                 '{ref:$ref, environment:$env, auto_merge:false, required_contexts:[], description:$d}' \
+               | gh api "repos/$GITHUB_REPOSITORY/deployments" --input - --jq .id)
+          gh api "repos/$GITHUB_REPOSITORY/deployments/$ID/statuses" \
+            -f state=success -f description="$FINAL applied to site-$SITE" >/dev/null
+          echo "deployment #$ID → site-$SITE"
