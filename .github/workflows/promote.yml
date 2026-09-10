@@ -5,19 +5,12 @@ on:
   workflow_dispatch:
     inputs:
       rc:
-        description: '통과한 RC 태그 (예: v1.12.1-rc.2)'
+        description: '통과한 RC 태그 (예: v1.1.0-rc.2)'
         required: true
         type: string
-      site:
-        description: '적용 사이트'
-        required: true
-        type: choice
-        options: [A, B]
-        default: A
 
 permissions:
   contents: write
-  deployments: write
 
 jobs:
   promote:
@@ -25,7 +18,6 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       RC: ${{ inputs.rc }}
-      SITE: ${{ inputs.site }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,12 +52,3 @@ jobs:
             echo "- commit: $RC_SHA"
             echo "- https://github.com/$GITHUB_REPOSITORY/releases/tag/$FINAL"
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 배포 기록 (repo 의 Environments 탭에 site-A 로 남김)
-        run: |
-          ID=$(jq -n --arg ref "$FINAL" --arg env "site-$SITE" --arg d "promoted from $RC" \
-                 '{ref:$ref, environment:$env, auto_merge:false, required_contexts:[], description:$d}' \
-               | gh api "repos/$GITHUB_REPOSITORY/deployments" --input - --jq .id)
-          gh api "repos/$GITHUB_REPOSITORY/deployments/$ID/statuses" \
-            -f state=success -f description="$FINAL applied to site-$SITE" >/dev/null
-          echo "deployment #$ID → site-$SITE"

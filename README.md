@@ -18,7 +18,7 @@ GitHub Release / Tag 흐름 테스트용 저장소. Docker 없이 `services/<svc
 | `ci/build.sh` | 바뀐 서비스만 tar 생성 + `images.json` + `SHA256SUMS` |
 | `ci/patch.sh` | 현장 적용 스크립트 흉내 (해시 검증 + 목록 출력) |
 | `.github/workflows/rc.yml` | 트리거 ①: `release/<버전>` push → `v<버전>-rc.N` Pre-release 자동 발행 |
-| `.github/workflows/promote.yml` | 트리거 ②: Run workflow 버튼 → rc 를 재빌드 없이 `v<버전>` 정식으로 승격 + 배포 기록 |
+| `.github/workflows/promote.yml` | 트리거 ②: Run workflow 버튼 → rc 를 재빌드 없이 `v<버전>` 정식으로 승격 |
 
 바뀐 서비스 판별 기준: 같은 버전의 직전 rc → 없으면 최신 정식 릴리즈 → 그것도 없으면 전체 빌드.
 
@@ -68,20 +68,19 @@ Windows 해시 검증 흉내: `certutil -hashfile rc2\images.json SHA256` 값을
 
 ### 4. 통과 → 승격 버튼
 
-GitHub 웹 → Actions → 왼쪽 `promote` → 오른쪽 **Run workflow** → `rc` 에 `v1.1.0-rc.2`, `site` 는 `A` → Run.
+GitHub 웹 → Actions → 왼쪽 `promote` → 오른쪽 **Run workflow** → `rc` 에 `v1.1.0-rc.2` → Run.
 (Use workflow from 은 `main` 그대로)
 
 CLI 로도 가능:
 
 ```bash
-gh workflow run promote -f rc=v1.1.0-rc.2 -f site=A
+gh workflow run promote -f rc=v1.1.0-rc.2
 ```
 
 확인할 것:
 
 - Releases 목록: `v1.1.0` **Latest** / `v1.1.0-rc.2` Pre-release / `v1.1.0-rc.1` Pre-release
 - `v1.1.0` 의 태그가 rc.2 와 **같은 커밋** 을 가리킴 (Release 페이지의 commit 링크)
-- repo 우측 **Environments** 에 `site-A` 가 생기고 `v1.1.0` 배포 기록이 남음
 - 첨부 파일이 rc.2 와 바이트 동일:
 
 ```bash
@@ -91,7 +90,7 @@ gh release download v1.1.0 -D final && diff final/SHA256SUMS rc2/SHA256SUMS && e
 ### 5. 잘못된 승격 시도 (막히는지 확인)
 
 ```bash
-gh workflow run promote -f rc=v1.1.0-rc.2 -f site=B
+gh workflow run promote -f rc=v1.1.0-rc.2
 ```
 
 `v1.1.0 이 이미 존재합니다` 로 실패해야 한다. 정식 태그는 덮어쓰지 않는다.
